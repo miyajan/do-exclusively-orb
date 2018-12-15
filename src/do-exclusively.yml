@@ -1,0 +1,61 @@
+version: 2.1
+
+description: |
+  This is a simple helper script to ensure that a certain action happens once at a time on a CircleCI project.
+  It is a higher-order command like sudo, so you can wrap whatever other commands you want with it.
+  This orb is inspired by https://github.com/bellkev/circle-lock-test
+  Orb repo: https://github.com/miyajan/do-exclusively-orb
+
+commands:
+  do-exclusively:
+    description: |
+      Run command exclusively.
+      This depends on jq.
+    parameters:
+      command:
+        description: |
+          Command executed exclusively.
+        type: string
+      token:
+        description: |
+          The env var containing CircleCI API token that can read builds for the project (either a user or project API token will work).
+          Pass this as a literal string such as `$CIRCLE_TOKEN`.
+          Do not paste the actual token into your configuration.
+        type: string
+    steps:
+    - run:
+        name: Run command exclusively
+        command: |
+          # sets $jq_prog
+          make_jq_prog() {
+              local jq_filters=""
+
+              jq_prog=".[] | select(.build_num < $CIRCLE_BUILD_NUM and (.status | test(\"running|pending|queued\")) $jq_filters) | .build_num"
+          }
+
+
+          set -e
+          set -u
+          set -o pipefail
+
+          api_url="https://circleci.com/api/v1/project/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME?circle-token=<< parameters.token >>&limit=100"
+
+          commit_message=$(git log -1 --pretty=%B)
+          make_jq_prog
+
+          echo "Checking for running builds..."
+
+          while true; do
+              builds=$(curl -s -H "Accept: application/json" "$api_url" | jq "$jq_prog")
+              if [[ $builds ]]; then
+                  echo "Waiting on builds:"
+                  echo "$builds"
+              else
+                  break
+              fi
+              echo "Retrying in 5 seconds..."
+              sleep 5
+          done
+
+          echo "Acquired lock"
+          << parameters.command >>
